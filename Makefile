@@ -1,6 +1,6 @@
-.PHONY: build build-linux test install uninstall start stop restart status logs logs-err \
+.PHONY: build build-linux build-release test install uninstall start stop restart status logs logs-err \
        build-docker start-docker stop-docker restart-docker logs-docker \
-       lint strict-lint swagger
+       lint strict-lint swagger release
 
 APP_NAME := weather
 PORT ?= 9206
@@ -85,7 +85,7 @@ start-docker: build-docker stop-docker
 		--label localitas.app=true \
 		-e LOCALITAS_API_TOKEN \
 		--add-host host.docker.internal:host-gateway \
-		$(APP_NAME):latest --listen :8000 --base-path $(BASE_PATH)
+		$(APP_NAME):latest serve --listen :8000 --base-path $(BASE_PATH)
 	@echo "Waiting for $(APP_NAME) to be ready..."
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
 		curl -sf http://localhost:$(PORT)/health.json > /dev/null 2>&1 && break; \
@@ -100,3 +100,26 @@ restart-docker: stop-docker start-docker
 
 logs-docker:
 	@docker logs -f $(APP_NAME)
+
+# ── Release ───────────────────────────────────────────────────
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+build-release: lint
+	@mkdir -p dist
+	@echo "Building $(APP_NAME) $(VERSION) ($(COMMIT))..."
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)" -trimpath \
+		-o dist/weather-server-darwin-arm64 ./cmd/weather-server
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)" -trimpath \
+		-o dist/weather-server-darwin-amd64 ./cmd/weather-server
+	@echo "Built: dist/weather-server-darwin-arm64, dist/weather-server-darwin-amd64"
+
+release: build-release
+	@if [ -z "$(VERSION)" ] || [ "$(VERSION)" = "dev" ]; then echo "Set VERSION=vX.Y.Z"; exit 1; fi
+	@echo "Creating release $(VERSION) on GitHub..."
+	gh release create $(VERSION) \
+		dist/weather-server-darwin-arm64 \
+		dist/weather-server-darwin-amd64 \
+		--title "$(VERSION)" --generate-notes
+	@echo "✅ Released $(VERSION)"
