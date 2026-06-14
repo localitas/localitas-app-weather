@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -10,7 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/localitas/localitas-app-weather"
+	weather "github.com/localitas/localitas-app-weather"
+	"github.com/urfave/cli/v3"
 )
 
 var (
@@ -19,25 +20,47 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
-		fmt.Printf("weather-server %s (commit: %s)\n", version, commit)
-		os.Exit(0)
+	app := &cli.Command{
+		Name:    "weather-server",
+		Usage:   "weather app server",
+		Version: version,
+		Commands: []*cli.Command{
+			serveCommand(),
+		},
+		DefaultCommand: "serve",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			return serveAction(ctx, cmd)
+		},
 	}
 
-	var (
-		listen   = flag.String("listen", ":0", "listen address")
-		basePath = flag.String("base-path", "/", "URL prefix for <base href>")
-	)
-	flag.Parse()
+	if err := app.Run(context.Background(), os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	app := weather.New(*basePath)
+func serveCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "serve",
+		Usage: "Start the server",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "listen", Value: ":0", Usage: "listen address"},
+			&cli.StringFlag{Name: "base-path", Value: "/", Usage: "URL prefix for <base href>"},
+		},
+		Action: serveAction,
+	}
+}
+
+func serveAction(ctx context.Context, cmd *cli.Command) error {
+	basePath := cmd.String("base-path")
+
+	a := weather.New(basePath)
 	mux := http.NewServeMux()
-	app.RegisterRoutes(mux)
+	a.RegisterRoutes(mux)
 	mux.HandleFunc("GET /health.json", weather.HandleHealth)
 
-	ln, err := net.Listen("tcp", *listen)
+	ln, err := net.Listen("tcp", cmd.String("listen"))
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		return fmt.Errorf("listen: %w", err)
 	}
 	addr := ln.Addr().(*net.TCPAddr)
 	fmt.Printf("weather-server listening on http://localhost:%d\n", addr.Port)
@@ -57,7 +80,5 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if err := http.Serve(ln, mux); err != nil {
-		log.Fatalf("serve: %v", err)
-	}
+	return http.Serve(ln, mux)
 }
