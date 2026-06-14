@@ -1,0 +1,231 @@
+{{define "index.html"}}
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather — Localitas</title>
+    <base href="{{.BasePath}}">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg-base: #fcfbfe; --color-bg-elevated: #f0eef7;
+            --color-text-primary: #1a1625; --color-text-secondary: #4a3f5c;
+            --color-glass-base: rgba(255, 255, 255, 0.75);
+            --color-glass-border: rgba(139, 117, 169, 0.35);
+            --color-accent: #7d6b96;
+            --shadow: 0 4px 16px rgba(139, 117, 169, 0.08);
+        }
+        [data-theme="dark"] {
+            --color-bg-base: #120f1a; --color-bg-elevated: #221b2e;
+            --color-text-primary: #e8e4f0; --color-text-secondary: #b3a8c8;
+            --color-glass-base: rgba(37, 31, 53, 0.85);
+            --color-glass-border: rgba(184, 164, 212, 0.15);
+            --color-accent: #c5b3e0;
+            --shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+        }
+        html, body { margin: 0; padding: 0; overflow: hidden; height: 100%; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--color-bg-base); color: var(--color-text-primary); display: flex; flex-direction: column; }
+        .glass { background: var(--color-glass-base); border: 1px solid var(--color-glass-border); box-shadow: var(--shadow); border-radius: 0.75rem; }
+        .bg { position: fixed; inset: 0; background: radial-gradient(circle at 10% 20%, var(--color-bg-elevated), var(--color-bg-base) 90%); z-index: -1; }
+        .search-bar { padding: 1.5rem; display: flex; justify-content: center; }
+        .search-box { display: flex; gap: 0.5rem; width: 100%; max-width: 500px; }
+        .search-input { flex: 1; padding: 0.75rem 1rem; font-size: 1.125rem; background: var(--color-glass-base); border: 1.5px solid var(--color-glass-border); border-radius: 0.75rem; color: var(--color-text-primary); outline: none; }
+        .search-input:focus { border-color: var(--color-accent); }
+        .search-btn { padding: 0.75rem 1.25rem; background: var(--color-accent); color: var(--color-bg-elevated); border: none; border-radius: 0.75rem; cursor: pointer; font-size: 1rem; }
+        .results { flex: 1; overflow-y: auto; padding: 0 1.5rem 1.5rem; }
+        .results-inner { max-width: 600px; margin: 0 auto; }
+
+        .current-card { padding: 1.5rem; margin-bottom: 1rem; text-align: center; }
+        .current-temp { font-size: 3.5rem; font-weight: 700; line-height: 1; }
+        .current-feels { font-size: 0.875rem; color: var(--color-text-secondary); }
+        .current-conditions { font-size: 1.125rem; margin: 0.5rem 0; }
+        .current-location { font-size: 0.875rem; color: var(--color-text-secondary); }
+        .current-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 1rem; }
+        .detail-item { text-align: center; }
+        .detail-value { font-weight: 600; font-size: 0.9375rem; }
+        .detail-label { font-size: 0.75rem; color: var(--color-text-secondary); }
+
+        .section-title { font-size: 0.8125rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); margin: 1rem 0 0.5rem; }
+        .hourly-scroll { display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.5rem; }
+        .hourly-item { flex-shrink: 0; width: 72px; text-align: center; padding: 0.5rem; border-radius: 0.5rem; background: var(--color-glass-base); border: 1px solid var(--color-glass-border); }
+        .hourly-time { font-size: 0.6875rem; color: var(--color-text-secondary); }
+        .hourly-temp { font-weight: 600; font-size: 0.875rem; margin: 0.25rem 0; }
+        .hourly-precip { font-size: 0.6875rem; color: #60a5fa; }
+
+        .daily-item { display: flex; align-items: center; padding: 0.625rem 0; border-bottom: 1px solid var(--color-glass-border); }
+        .daily-item:last-child { border-bottom: none; }
+        .daily-day { width: 90px; font-weight: 500; font-size: 0.875rem; }
+        .daily-icon { width: 28px; text-align: center; }
+        .daily-precip { width: 50px; font-size: 0.75rem; color: #60a5fa; text-align: center; }
+        .daily-temps { flex: 1; display: flex; align-items: center; gap: 0.5rem; justify-content: flex-end; }
+        .daily-low { color: var(--color-text-secondary); font-size: 0.875rem; width: 35px; text-align: right; }
+        .daily-bar { flex: 1; max-width: 100px; height: 4px; background: var(--color-glass-border); border-radius: 2px; position: relative; }
+        .daily-bar-fill { position: absolute; height: 100%; background: linear-gradient(90deg, #60a5fa, #f97316); border-radius: 2px; }
+        .daily-high { font-weight: 600; font-size: 0.875rem; width: 35px; }
+        .daily-sun { font-size: 0.6875rem; color: var(--color-text-secondary); width: 120px; text-align: right; }
+
+        .empty-state { text-align: center; padding: 4rem 2rem; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="bg"></div>
+
+    <div class="search-bar">
+        <div class="search-box">
+            <input type="text" id="loc-input" class="search-input" placeholder="Zip code or city name..." autofocus
+                   onkeydown="if(event.key==='Enter')lookup()">
+            <button class="search-btn" onclick="lookup()">
+                <i data-lucide="search" class="w-5 h-5" style="display:inline;vertical-align:middle;"></i>
+            </button>
+            <a href="javascript:void(0)" onclick="showDocs()" style="display:flex;align-items:center;padding:0.75rem;border-radius:0.75rem;border:1px solid var(--color-glass-border);background:var(--color-glass-base);color:var(--color-text-secondary);text-decoration:none;cursor:pointer;" title="Documentation">
+                <i data-lucide="book-open" class="w-5 h-5" style="display:inline;"></i>
+            </a>
+        </div>
+    </div>
+
+    <div class="results">
+        <div class="results-inner" id="results">
+            <div class="empty-state">
+                <i data-lucide="cloud-sun" style="width:48px;height:48px;color:var(--color-accent);display:block;margin:0 auto 1rem;"></i>
+                <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:0.5rem;">Weather</h2>
+                <p style="color:var(--color-text-secondary);">Enter a zip code or city name for the forecast</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const html = document.documentElement;
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            html.setAttribute('data-theme', localStorage.getItem('theme') || (prefersDark ? 'dark' : 'light'));
+            window.addEventListener('message', e => { if (e.data && e.data.type === 'theme-change') html.setAttribute('data-theme', e.data.theme); });
+        })();
+        document.addEventListener('DOMContentLoaded', function() {
+            lucide.createIcons();
+            if (new URLSearchParams(window.location.search).get('docs') === 'true') showDocs();
+        });
+
+        function showDocs() {
+            document.querySelector('.results').innerHTML = '<div style="padding:1rem;color:var(--color-text-secondary);">Loading documentation...</div>';
+            fetch('/apps/weather/help?format=html')
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                document.querySelector('.results').innerHTML = '<div style="display:flex;justify-content:center;height:100%;">' + html + '</div>';
+                lucide.createIcons();
+            });
+        }
+
+        function helpShowSwagger() {
+            var w = document.getElementById('help-wrapper');
+            if (!w) return;
+            var swaggerUrl = w.dataset.swaggerUrl;
+            w.innerHTML = '<div style="display:flex;flex-direction:column;flex:1;min-height:0;">'
+                + '<div style="padding:0.5rem 1rem;border-bottom:1px solid var(--color-glass-border);display:flex;align-items:center;gap:0.75rem;">'
+                + '<a onclick="showDocs()" style="color:var(--color-accent);cursor:pointer;font-size:0.8125rem;text-decoration:none;">\u2190 Back to docs</a>'
+                + '<span style="font-size:0.8125rem;font-weight:500;color:var(--color-text-primary);">API Documentation</span></div>'
+                + '<iframe src="' + swaggerUrl + '" style="flex:1;border:none;width:100%;"></iframe></div>';
+        }
+
+        function lookup() {
+            const q = document.getElementById('loc-input').value.trim();
+            if (!q) return;
+            const el = document.getElementById('results');
+            el.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--color-text-secondary)"><i data-lucide="loader" class="w-5 h-5" style="display:inline;animation:spin 1s linear infinite"></i> Fetching weather...</div>';
+            lucide.createIcons();
+            fetch('api/weather?q=' + encodeURIComponent(q))
+                .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.error); }); return r.json(); })
+                .then(data => render(data))
+                .catch(err => { el.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--color-text-secondary)">' + esc(err.message) + '</div>'; });
+            if (window.parent !== window) window.parent.postMessage({ type: 'localitas-navigate', search: '?q=' + encodeURIComponent(q) }, '*');
+        }
+
+        function render(w) {
+            const c = w.current;
+            let h = '';
+
+            // Current conditions
+            h += '<div class="current-card glass">';
+            h += '<div class="current-location">' + esc(w.location) + '</div>';
+            h += '<div style="margin:0.75rem 0"><i data-lucide="' + weatherIcon(c.conditions) + '" style="width:48px;height:48px;color:var(--color-accent);display:inline"></i></div>';
+            h += '<div class="current-temp">' + Math.round(c.temperature) + '°</div>';
+            h += '<div class="current-feels">Feels like ' + Math.round(c.feels_like) + '°F</div>';
+            h += '<div class="current-conditions">' + esc(c.conditions) + '</div>';
+            h += '<div class="current-details">';
+            h += detail('droplets', c.humidity + '%', 'Humidity');
+            h += detail('wind', Math.round(c.wind_speed) + ' mph ' + c.wind_direction, 'Wind');
+            h += detail('cloud', c.cloud_cover + '%', 'Cloud Cover');
+            h += detail('eye', c.visibility_miles.toFixed(1) + ' mi', 'Visibility');
+            h += detail('sun', c.uv_index.toFixed(0) + ' ' + c.uv_level, 'UV Index');
+            if (c.precipitation_inches > 0) h += detail('cloud-rain', c.precipitation_inches.toFixed(2) + ' in', 'Precip');
+            h += '</div></div>';
+
+            // Hourly
+            if (w.hourly && w.hourly.length) {
+                h += '<div class="section-title">Hourly Forecast</div>';
+                h += '<div class="hourly-scroll">';
+                for (const hr of w.hourly.slice(0, 24)) {
+                    h += '<div class="hourly-item">';
+                    h += '<div class="hourly-time">' + hr.time + '</div>';
+                    h += '<div><i data-lucide="' + weatherIcon(hr.conditions) + '" style="width:16px;height:16px;color:var(--color-accent);display:inline"></i></div>';
+                    h += '<div class="hourly-temp">' + Math.round(hr.temperature) + '°</div>';
+                    if (hr.precip_probability > 0) h += '<div class="hourly-precip">' + hr.precip_probability + '%</div>';
+                    h += '</div>';
+                }
+                h += '</div>';
+            }
+
+            // Daily
+            if (w.daily && w.daily.length) {
+                const allTemps = w.daily.flatMap(d => [d.high, d.low]);
+                const minT = Math.min(...allTemps), maxT = Math.max(...allTemps), range = maxT - minT || 1;
+
+                h += '<div class="section-title">7-Day Forecast</div>';
+                h += '<div class="glass" style="padding:0.75rem 1rem">';
+                for (const d of w.daily) {
+                    const leftPct = ((d.low - minT) / range * 100).toFixed(0);
+                    const widthPct = ((d.high - d.low) / range * 100).toFixed(0);
+                    h += '<div class="daily-item">';
+                    h += '<div class="daily-day">' + d.day + '</div>';
+                    h += '<div class="daily-icon"><i data-lucide="' + weatherIcon(d.conditions) + '" style="width:16px;height:16px;color:var(--color-accent);display:inline"></i></div>';
+                    h += '<div class="daily-precip">' + (d.precip_probability > 0 ? d.precip_probability + '%' : '') + '</div>';
+                    h += '<div class="daily-temps">';
+                    h += '<span class="daily-low">' + Math.round(d.low) + '°</span>';
+                    h += '<div class="daily-bar"><div class="daily-bar-fill" style="left:' + leftPct + '%;width:' + widthPct + '%"></div></div>';
+                    h += '<span class="daily-high">' + Math.round(d.high) + '°</span>';
+                    h += '</div>';
+                    h += '<div class="daily-sun">☀ ' + d.sunrise + ' · ' + d.sunset + '</div>';
+                    h += '</div>';
+                }
+                h += '</div>';
+            }
+
+            document.getElementById('results').innerHTML = h;
+            lucide.createIcons();
+        }
+
+        function detail(icon, value, label) {
+            return '<div class="detail-item"><i data-lucide="' + icon + '" style="width:16px;height:16px;color:var(--color-accent);display:inline"></i><div class="detail-value">' + value + '</div><div class="detail-label">' + label + '</div></div>';
+        }
+
+        function weatherIcon(conditions) {
+            const c = (conditions || '').toLowerCase();
+            if (c.includes('clear') || c.includes('sun')) return 'sun';
+            if (c.includes('partly')) return 'cloud-sun';
+            if (c.includes('fog')) return 'cloud-fog';
+            if (c.includes('thunder')) return 'cloud-lightning';
+            if (c.includes('snow') || c.includes('freez')) return 'snowflake';
+            if (c.includes('rain') || c.includes('drizzle') || c.includes('shower')) return 'cloud-rain';
+            return 'cloud';
+        }
+
+        function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+        const q = new URLSearchParams(window.location.search).get('q');
+        if (q) { document.getElementById('loc-input').value = q; lookup(); }
+    </script>
+</body>
+</html>
+{{end}}
