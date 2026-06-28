@@ -1,6 +1,7 @@
 services:
   web:
     image: ghcr.io/localitas/localitas-app-weather:latest
+    command: ["serve", "--listen", ":8000", "--base-path", "/apps/ext/weather/"]
     ports:
       - "${APP_PORT:-9206}:8000"
     environment:
