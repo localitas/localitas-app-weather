@@ -10,6 +10,63 @@ import (
 	"time"
 )
 
+var (
+	zippopotamURL = "https://api.zippopotam.us/us/"
+	nominatimURL  = "https://nominatim.openstreetmap.org/search"
+	openMeteoURL  = "https://api.open-meteo.com/v1/forecast"
+	retryDelay    = 500 * time.Millisecond
+)
+
+// upstreamAttempts is how many times a public service is asked before its
+// failure is the lookup's.
+const upstreamAttempts = 3
+
+// upstreamError is a failure of a service the lookup depends on, not of the
+// place asked about.
+type upstreamError struct{ err error }
+
+func (e *upstreamError) Error() string { return e.err.Error() }
+func (e *upstreamError) Unwrap() error { return e.err }
+
+// getUpstream GETs u from service, asking again after a pause when it fails
+// (a network error or a 5xx), as public APIs do for a moment now and then.
+// A response it returns has a status below 500.
+func getUpstream(ctx context.Context, service, u string) (*http.Response, error) {
+	var last error
+	for attempt := 0; attempt < upstreamAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, &upstreamError{fmt.Errorf("%s: %w", service, ctx.Err())}
+			case <-time.After(retryDelay * time.Duration(attempt)):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Localitas Weather/1.0")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			last = fmt.Errorf("%s failed: %w", service, err)
+			continue
+		}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			resp.Body.Close()
+			last = fmt.Errorf("%s returned %d", service, resp.StatusCode)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, &upstreamError{last}
+}
+
+type nominatimPlace struct {
+	DisplayName string `json:"display_name"`
+	Lat         string `json:"lat"`
+	Lon         string `json:"lon"`
+}
+
 func LookupWeather(ctx context.Context, location string) (*WeatherResult, error) {
 	if location == "" {
 		return nil, fmt.Errorf("location is required")
@@ -41,12 +98,14 @@ func geocode(ctx context.Context, location string) (float64, float64, string, er
 }
 
 func geocodeZip(ctx context.Context, zip string) (float64, float64, string, error) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.zippopotam.us/us/"+zip, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		return 0, 0, "", fmt.Errorf("zip lookup failed")
+	resp, err := getUpstream(ctx, "zip lookup", zippopotamURL+zip)
+	if err != nil {
+		return 0, 0, "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, "", fmt.Errorf("no results for zip %s", zip)
+	}
 	var result struct {
 		Places []struct {
 			PlaceName string `json:"place name"`
@@ -64,19 +123,16 @@ func geocodeZip(ctx context.Context, zip string) (float64, float64, string, erro
 }
 
 func geocodeNominatim(ctx context.Context, location string) (float64, float64, string, error) {
-	u := fmt.Sprintf("https://nominatim.openstreetmap.org/search?q=%s&format=json&limit=1&accept-language=en", url.QueryEscape(location))
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
-	req.Header.Set("User-Agent", "Localitas Weather/1.0")
-	resp, err := http.DefaultClient.Do(req)
+	u := fmt.Sprintf("%s?q=%s&format=json&limit=1&accept-language=en", nominatimURL, url.QueryEscape(location))
+	resp, err := getUpstream(ctx, "geocoding", u)
 	if err != nil {
-		return 0, 0, "", fmt.Errorf("geocode failed: %w", err)
+		return 0, 0, "", err
 	}
 	defer resp.Body.Close()
-	var results []struct {
-		DisplayName string `json:"display_name"`
-		Lat         string `json:"lat"`
-		Lon         string `json:"lon"`
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, "", &upstreamError{fmt.Errorf("geocoding returned %d", resp.StatusCode)}
 	}
+	var results []nominatimPlace
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil || len(results) == 0 {
 		return 0, 0, "", fmt.Errorf("no location found for: %s", location)
 	}
@@ -87,24 +143,23 @@ func geocodeNominatim(ctx context.Context, location string) (float64, float64, s
 
 func fetchOpenMeteo(ctx context.Context, lat, lon float64) (*OpenMeteoResponse, error) {
 	u := fmt.Sprintf(
-		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"+
+		"%s?latitude=%.4f&longitude=%.4f"+
 			"&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,precipitation,cloud_cover,visibility,uv_index"+
 			"&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,cloud_cover,visibility,uv_index"+
 			"&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,precipitation_probability_max,sunrise,sunset,uv_index_max,wind_speed_10m_max"+
 			"&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=7",
-		lat, lon)
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
-	resp, err := http.DefaultClient.Do(req)
+		openMeteoURL, lat, lon)
+	resp, err := getUpstream(ctx, "Open-Meteo", u)
 	if err != nil {
-		return nil, fmt.Errorf("Open-Meteo API failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Open-Meteo returned %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &upstreamError{fmt.Errorf("Open-Meteo returned %d", resp.StatusCode)}
 	}
 	var data OpenMeteoResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("parse Open-Meteo: %w", err)
+		return nil, &upstreamError{fmt.Errorf("parse Open-Meteo: %w", err)}
 	}
 	return &data, nil
 }
@@ -232,26 +287,5 @@ func uvLevel(uv float64) string {
 		return "Very High"
 	default:
 		return "Extreme"
-	}
-}
-
-func weatherIcon(code int) string {
-	switch code {
-	case 0:
-		return "sun"
-	case 1, 2, 3:
-		return "cloud-sun"
-	case 45, 48:
-		return "cloud-fog"
-	case 51, 53, 55, 61, 63, 65, 80, 81, 82:
-		return "cloud-rain"
-	case 56, 57, 66, 67:
-		return "cloud-snow"
-	case 71, 73, 75, 77, 85, 86:
-		return "snowflake"
-	case 95, 96, 99:
-		return "cloud-lightning"
-	default:
-		return "cloud"
 	}
 }
