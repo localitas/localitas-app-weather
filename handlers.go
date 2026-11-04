@@ -1,6 +1,7 @@
 package weather
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/localitas/localitas-go/httputil"
@@ -15,6 +16,11 @@ func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := LookupWeather(r.Context(), location)
+	var upstream *upstreamError
+	if errors.As(err, &upstream) {
+		writeErr(w, r, http.StatusBadGateway, "%v", err)
+		return
+	}
 	if err != nil {
 		writeErr(w, r, http.StatusNotFound, "%v", err)
 		return
