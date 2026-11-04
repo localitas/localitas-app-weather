@@ -42,9 +42,9 @@ func serveUpstreams(t *testing.T, places []nominatimPlace, failures int, failSta
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	oldNominatim, oldOpenMeteo, oldDelay := nominatimURL, openMeteoURL, retryDelay
-	nominatimURL, openMeteoURL, retryDelay = srv.URL+"/search", srv.URL+"/v1/forecast", time.Millisecond
-	t.Cleanup(func() { nominatimURL, openMeteoURL, retryDelay = oldNominatim, oldOpenMeteo, oldDelay })
+	oldNominatim, oldOpenMeteo, oldUpstream := nominatimURL, openMeteoURL, upstream
+	nominatimURL, openMeteoURL, upstream.Delay = srv.URL+"/search", srv.URL+"/v1/forecast", time.Millisecond
+	t.Cleanup(func() { nominatimURL, openMeteoURL, upstream = oldNominatim, oldOpenMeteo, oldUpstream })
 	return u
 }
 
@@ -79,8 +79,8 @@ func TestLookup_AnUpstreamThatKeepsFailingIs502(t *testing.T) {
 	if w := lookup(t); w.Code != http.StatusBadGateway {
 		t.Errorf("lookup = %d %s, want 502", w.Code, w.Body)
 	}
-	if got := u.forecastCalls.Load(); got != upstreamAttempts {
-		t.Errorf("forecast asked %d times, want %d", got, upstreamAttempts)
+	if got := u.forecastCalls.Load(); got != 3 {
+		t.Errorf("forecast asked %d times, want 3", got)
 	}
 }
 

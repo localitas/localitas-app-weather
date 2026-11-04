@@ -8,57 +8,19 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/localitas/localitas-go/httputil"
 )
 
 var (
 	zippopotamURL = "https://api.zippopotam.us/us/"
 	nominatimURL  = "https://nominatim.openstreetmap.org/search"
 	openMeteoURL  = "https://api.open-meteo.com/v1/forecast"
-	retryDelay    = 500 * time.Millisecond
+	upstream      = httputil.Upstream{UserAgent: "Localitas Weather/1.0"}
 )
 
-// upstreamAttempts is how many times a public service is asked before its
-// failure is the lookup's.
-const upstreamAttempts = 3
-
-// upstreamError is a failure of a service the lookup depends on, not of the
-// place asked about.
-type upstreamError struct{ err error }
-
-func (e *upstreamError) Error() string { return e.err.Error() }
-func (e *upstreamError) Unwrap() error { return e.err }
-
-// getUpstream GETs u from service, asking again after a pause when it fails
-// (a network error or a 5xx), as public APIs do for a moment now and then.
-// A response it returns has a status below 500.
-func getUpstream(ctx context.Context, service, u string) (*http.Response, error) {
-	var last error
-	for attempt := 0; attempt < upstreamAttempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, &upstreamError{fmt.Errorf("%s: %w", service, ctx.Err())}
-			case <-time.After(retryDelay * time.Duration(attempt)):
-			}
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("User-Agent", "Localitas Weather/1.0")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			last = fmt.Errorf("%s failed: %w", service, err)
-			continue
-		}
-		if resp.StatusCode >= http.StatusInternalServerError {
-			resp.Body.Close()
-			last = fmt.Errorf("%s returned %d", service, resp.StatusCode)
-			continue
-		}
-		return resp, nil
-	}
-	return nil, &upstreamError{last}
+func upstreamFailed(service string, err error) error {
+	return &httputil.UpstreamError{Service: service, Err: err}
 }
 
 type nominatimPlace struct {
@@ -98,7 +60,7 @@ func geocode(ctx context.Context, location string) (float64, float64, string, er
 }
 
 func geocodeZip(ctx context.Context, zip string) (float64, float64, string, error) {
-	resp, err := getUpstream(ctx, "zip lookup", zippopotamURL+zip)
+	resp, err := upstream.Get(ctx, "zip lookup", zippopotamURL+zip)
 	if err != nil {
 		return 0, 0, "", err
 	}
@@ -124,13 +86,13 @@ func geocodeZip(ctx context.Context, zip string) (float64, float64, string, erro
 
 func geocodeNominatim(ctx context.Context, location string) (float64, float64, string, error) {
 	u := fmt.Sprintf("%s?q=%s&format=json&limit=1&accept-language=en", nominatimURL, url.QueryEscape(location))
-	resp, err := getUpstream(ctx, "geocoding", u)
+	resp, err := upstream.Get(ctx, "geocoding", u)
 	if err != nil {
 		return 0, 0, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, 0, "", &upstreamError{fmt.Errorf("geocoding returned %d", resp.StatusCode)}
+		return 0, 0, "", upstreamFailed("geocoding", fmt.Errorf("returned %d", resp.StatusCode))
 	}
 	var results []nominatimPlace
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil || len(results) == 0 {
@@ -149,17 +111,17 @@ func fetchOpenMeteo(ctx context.Context, lat, lon float64) (*OpenMeteoResponse, 
 			"&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,precipitation_probability_max,sunrise,sunset,uv_index_max,wind_speed_10m_max"+
 			"&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=7",
 		openMeteoURL, lat, lon)
-	resp, err := getUpstream(ctx, "Open-Meteo", u)
+	resp, err := upstream.Get(ctx, "Open-Meteo", u)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &upstreamError{fmt.Errorf("Open-Meteo returned %d", resp.StatusCode)}
+		return nil, upstreamFailed("Open-Meteo", fmt.Errorf("returned %d", resp.StatusCode))
 	}
 	var data OpenMeteoResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, &upstreamError{fmt.Errorf("parse Open-Meteo: %w", err)}
+		return nil, upstreamFailed("Open-Meteo", fmt.Errorf("parse: %w", err))
 	}
 	return &data, nil
 }

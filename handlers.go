@@ -16,8 +16,8 @@ func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := LookupWeather(r.Context(), location)
-	var upstream *upstreamError
-	if errors.As(err, &upstream) {
+	var failed *httputil.UpstreamError
+	if errors.As(err, &failed) {
 		writeErr(w, r, http.StatusBadGateway, "%v", err)
 		return
 	}
