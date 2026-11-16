@@ -44,55 +44,68 @@ Temperature values are returned in the units configured by Open-Meteo (Celsius b
 
 ## Build & Deploy
 
+Run these in the app's repository, `~/localitas-app-weather`.
+
 ### Version
 
 ```bash
-./weather-server --version
+bin/weather-server --version
 ```
 
 ### Build from source
 
 ```bash
-# Development (native)
-cd apps/weather && go build -o bin/weather-server ./cmd/weather-server
+# Native binary (bin/weather-server)
+make build
 
-# Cross-compile for Linux
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o bin/weather-server-linux-amd64 ./cmd/weather-server
+# Linux amd64 binary the Docker image is built from (weather-server-linux-amd64)
+make build-linux
 ```
+
+Both run `make lint` (gofmt and go vet) first; `make test` runs the lint step and then the tests.
+
+### Run natively
+
+```bash
+make start   # builds bin/weather-server, writes the launchd service com.localitas.app.weather for it and loads it on port 9206
+make stop
+make logs    # follows ~/.localitas/logs/weather/stdout.log
+```
+
+The app announces itself to core when it starts, and core serves it at `/apps/ext/weather/`.
 
 ### Docker
 
-Build a Docker image directly from the binary:
-
 ```bash
-# Default base image (debian:12-slim)
-./weather-server docker-build
-
-# Custom base image
-./weather-server docker-build --base ubuntu:24.04
-
-# Custom Dockerfile
-./weather-server docker-build --dockerfile ./my.Dockerfile
-
-# Tag and push to registry
-./weather-server docker-build --tag ghcr.io/localitas/weather:latest --push
+make build-docker   # builds the Linux binary and the weather:latest image
+make start-docker   # runs container "weather" on port 9206, labelled localitas.app=true
+make stop-docker
+make logs-docker
 ```
 
-The `docker-build` command requires a Linux amd64 binary in the same directory. Run `make deploy-build` from the project root first.
+Core registers containers labelled `localitas.app=true` once Docker reports them healthy.
+
+### Publish
+
+```bash
+# Run the tests, build the image, push ghcr.io/localitas/localitas-app-weather:latest and :<VERSION>
+make docker-push
+
+# Build dist/weather-server-darwin-arm64 and dist/weather-server-darwin-amd64
+# and create GitHub release vX.Y.Z on this repository with them
+make release VERSION=vX.Y.Z
+```
+
+`VERSION` defaults to `git describe --tags --always --dirty`.
 
 ### Download
 
-Pre-built binaries are available on the [GitHub releases page](https://github.com/localitas/localitas/releases).
+Pre-built macOS binaries are on the [releases page](https://github.com/localitas/localitas-app-weather/releases):
+- `weather-server-darwin-arm64` (Apple Silicon)
+- `weather-server-darwin-amd64` (Intel)
 
-Each release includes three builds per app:
-- `weather-server-darwin-arm64` (macOS Apple Silicon)
-- `weather-server-linux-amd64` (Linux x86_64)
-- `weather-server-linux-arm64` (Linux ARM64)
+Every push to `main` publishes a release: `.github/workflows/release.yml` runs the tests and releases both binaries as `v0.1.<commit count>.<UTC timestamp>`. `make release` publishes one by hand.
 
 Download with the GitHub CLI:
 
-    gh release download --repo localitas/localitas --pattern 'weather-server-*'
-
-### Release
-
-All app binaries are published to GitHub releases as part of `make deploy-upload-image`.
+    gh release download --repo localitas/localitas-app-weather --pattern 'weather-server-*'
