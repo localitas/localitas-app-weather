@@ -66,6 +66,9 @@
         .daily-high { font-weight: 600; font-size: 0.875rem; width: 35px; }
         .daily-sun { font-size: 0.6875rem; color: var(--color-text-secondary); width: 120px; text-align: right; }
 
+        .source { margin-top: 1rem; font-size: 0.6875rem; color: var(--color-text-secondary); text-align: center; opacity: 0.8; }
+        .source a { color: inherit; text-decoration: underline; }
+
         .empty-state { text-align: center; padding: 4rem 2rem; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
@@ -135,7 +138,8 @@
             const el = document.getElementById('results');
             el.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--color-text-secondary)"><i data-lucide="loader" class="w-5 h-5" style="display:inline;animation:spin 1s linear infinite"></i> Fetching weather...</div>';
             lucide.createIcons();
-            fetch('api/weather?q=' + encodeURIComponent(q))
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+            fetch('api/weather?q=' + encodeURIComponent(q) + '&tz=' + encodeURIComponent(tz))
                 .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.error); }); return r.json(); })
                 .then(data => render(data))
                 .catch(err => { el.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--color-text-secondary)">' + esc(err.message) + '</div>'; });
@@ -151,14 +155,14 @@
             h += '<div class="current-location">' + esc(w.location) + '</div>';
             h += '<div style="margin:0.75rem 0"><i data-lucide="' + weatherIcon(c.conditions) + '" style="width:48px;height:48px;color:var(--color-accent);display:inline"></i></div>';
             h += '<div class="current-temp">' + Math.round(c.temperature) + '°</div>';
-            h += '<div class="current-feels">Feels like ' + Math.round(c.feels_like) + '°F</div>';
+            h += '<div class="current-feels">Feels like ' + (c.feels_like == null ? '—' : Math.round(c.feels_like) + '°F') + '</div>';
             h += '<div class="current-conditions">' + esc(c.conditions) + '</div>';
             h += '<div class="current-details">';
             h += detail('droplets', c.humidity + '%', 'Humidity');
             h += detail('wind', Math.round(c.wind_speed) + ' mph ' + c.wind_direction, 'Wind');
             h += detail('cloud', c.cloud_cover + '%', 'Cloud Cover');
-            h += detail('eye', c.visibility_miles.toFixed(1) + ' mi', 'Visibility');
-            h += detail('sun', c.uv_index.toFixed(0) + ' ' + c.uv_level, 'UV Index');
+            h += detail('eye', c.visibility_miles == null ? '—' : c.visibility_miles.toFixed(1) + ' mi', 'Visibility');
+            h += detail('sun', c.uv_index == null ? '—' : c.uv_index.toFixed(0) + ' ' + c.uv_level, 'UV Index');
             if (c.precipitation_inches > 0) h += detail('cloud-rain', c.precipitation_inches.toFixed(2) + ' in', 'Precip');
             h += '</div></div>';
 
@@ -171,7 +175,8 @@
                     h += '<div class="hourly-time">' + hr.time + '</div>';
                     h += '<div><i data-lucide="' + weatherIcon(hr.conditions) + '" style="width:16px;height:16px;color:var(--color-accent);display:inline"></i></div>';
                     h += '<div class="hourly-temp">' + Math.round(hr.temperature) + '°</div>';
-                    if (hr.precip_probability > 0) h += '<div class="hourly-precip">' + hr.precip_probability + '%</div>';
+                    if (hr.precip_probability == null) h += '<div class="hourly-precip">—</div>';
+                    else if (hr.precip_probability > 0) h += '<div class="hourly-precip">' + hr.precip_probability + '%</div>';
                     h += '</div>';
                 }
                 h += '</div>';
@@ -190,16 +195,24 @@
                     h += '<div class="daily-item">';
                     h += '<div class="daily-day">' + d.day + '</div>';
                     h += '<div class="daily-icon"><i data-lucide="' + weatherIcon(d.conditions) + '" style="width:16px;height:16px;color:var(--color-accent);display:inline"></i></div>';
-                    h += '<div class="daily-precip">' + (d.precip_probability > 0 ? d.precip_probability + '%' : '') + '</div>';
+                    h += '<div class="daily-precip">' + (d.precip_probability == null ? '—' : d.precip_probability > 0 ? d.precip_probability + '%' : '') + '</div>';
                     h += '<div class="daily-temps">';
                     h += '<span class="daily-low">' + Math.round(d.low) + '°</span>';
                     h += '<div class="daily-bar"><div class="daily-bar-fill" style="left:' + leftPct + '%;width:' + widthPct + '%"></div></div>';
                     h += '<span class="daily-high">' + Math.round(d.high) + '°</span>';
                     h += '</div>';
-                    h += '<div class="daily-sun">☀ ' + d.sunrise + ' · ' + d.sunset + '</div>';
+                    h += '<div class="daily-sun">☀ ' + (d.sunrise || '—') + ' · ' + (d.sunset || '—') + '</div>';
                     h += '</div>';
                 }
                 h += '</div>';
+            }
+
+            if (w.source && w.source.name) {
+                const s = w.source;
+                h += '<div class="source">Forecast by <a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.name) + '</a>'
+                    + ' (<a href="' + esc(s.license_url) + '" target="_blank" rel="noopener">' + esc(s.license) + '</a>)'
+                    + (s.changes ? ', ' + esc(s.changes) : '')
+                    + (w.time_zone ? ' · times in ' + esc(w.time_zone) : '') + '</div>';
             }
 
             document.getElementById('results').innerHTML = h;
@@ -216,7 +229,7 @@
             if (c.includes('partly')) return 'cloud-sun';
             if (c.includes('fog')) return 'cloud-fog';
             if (c.includes('thunder')) return 'cloud-lightning';
-            if (c.includes('snow') || c.includes('freez')) return 'snowflake';
+            if (c.includes('snow') || c.includes('sleet') || c.includes('freez')) return 'snowflake';
             if (c.includes('rain') || c.includes('drizzle') || c.includes('shower')) return 'cloud-rain';
             return 'cloud';
         }

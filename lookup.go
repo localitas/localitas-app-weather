@@ -7,16 +7,38 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/localitas/localitas-go/httputil"
 )
 
+// userAgent names the app and where to reach its makers, as MET Norway's
+// and Nominatim's terms ask of every client.
+const userAgent = "Localitas Weather/1.0 https://github.com/localitas/localitas-app-weather"
+
 var (
 	zippopotamURL = "https://api.zippopotam.us/us/"
 	nominatimURL  = "https://nominatim.openstreetmap.org/search"
 	openMeteoURL  = "https://api.open-meteo.com/v1/forecast"
-	upstream      = httputil.Upstream{UserAgent: "Localitas Weather/1.0"}
+	metURL        = "https://api.met.no/weatherapi/locationforecast/2.0/complete"
+	upstream      = httputil.Upstream{UserAgent: userAgent}
+
+	// Open-Meteo answers in well under a second; a try that has not
+	// answered in 5 s has stalled, and MET Norway is asked then
+	// (fallbackAfter) while Open-Meteo is tried again. Both stalling ends
+	// after about 30 s: Open-Meteo's 3 tries take 16.5 s, MET's 3 tries of
+	// 8 s take 25.5 s from 5 s. That is no longer than one provider took
+	// before, and leaves core's minute room for geocoding.
+	openMeteoUpstream = httputil.Upstream{UserAgent: userAgent, AttemptTimeout: 5 * time.Second}
+	metUpstream       = httputil.Upstream{UserAgent: userAgent, AttemptTimeout: 8 * time.Second}
+	fallbackAfter     = 5 * time.Second
+)
+
+var (
+	openMeteoSource = Source{Name: "Open-Meteo", URL: "https://open-meteo.com", License: "CC BY 4.0", LicenseURL: "https://creativecommons.org/licenses/by/4.0/"}
+	metSource       = Source{Name: "MET Norway", URL: "https://api.met.no", License: "CC BY 4.0", LicenseURL: "https://creativecommons.org/licenses/by/4.0/",
+		Changes: "converted to °F, mph and inches; days summarized from MET's forecast periods; sunrise and sunset computed"}
 )
 
 func upstreamFailed(service string, err error) error {
@@ -29,7 +51,9 @@ type nominatimPlace struct {
 	Lon         string `json:"lon"`
 }
 
-func LookupWeather(ctx context.Context, location string) (*WeatherResult, error) {
+// LookupWeather forecasts location. Open-Meteo gives times in the place's
+// own clock; MET Norway gives UTC, shown in loc.
+func LookupWeather(ctx context.Context, location string, loc *time.Location) (*WeatherResult, error) {
 	if location == "" {
 		return nil, fmt.Errorf("location is required")
 	}
@@ -38,12 +62,79 @@ func LookupWeather(ctx context.Context, location string) (*WeatherResult, error)
 	if err != nil {
 		return nil, err
 	}
+	return forecast(ctx, name, lat, lon, loc)
+}
 
+// forecastAnswer is one provider's forecast or how it failed.
+type forecastAnswer struct {
+	result *WeatherResult
+	err    error
+}
+
+// forecast asks Open-Meteo, and MET Norway too once Open-Meteo has failed
+// or not answered within fallbackAfter; the first forecast either gives is
+// the answer, and the other is stopped.
+func forecast(ctx context.Context, name string, lat, lon float64, loc *time.Location) (*WeatherResult, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	openMeteo := make(chan forecastAnswer, 1)
+	go func() {
+		r, err := openMeteoForecast(ctx, name, lat, lon)
+		openMeteo <- forecastAnswer{r, err}
+	}()
+
+	var openMeteoErr, metErr error
+	select {
+	case a := <-openMeteo:
+		if a.err == nil {
+			return a.result, nil
+		}
+		openMeteoErr, openMeteo = a.err, nil
+	case <-time.After(fallbackAfter):
+	}
+
+	met := make(chan forecastAnswer, 1)
+	go func() {
+		r, err := metNorwayForecast(ctx, name, lat, lon, loc)
+		met <- forecastAnswer{r, err}
+	}()
+	for openMeteo != nil || met != nil {
+		select {
+		case a := <-openMeteo:
+			if a.err == nil {
+				return a.result, nil
+			}
+			openMeteoErr, openMeteo = a.err, nil
+		case a := <-met:
+			if a.err == nil {
+				return a.result, nil
+			}
+			metErr, met = a.err, nil
+		}
+	}
+	return nil, providersFailed{openMeteoErr, metErr}
+}
+
+// providersFailed is every forecast provider failing; each is an
+// *httputil.UpstreamError, so the lookup is a 502.
+type providersFailed []error
+
+func (p providersFailed) Error() string {
+	msgs := make([]string, len(p))
+	for i, err := range p {
+		msgs[i] = "[" + err.Error() + "]"
+	}
+	return "no forecast provider answered: " + strings.Join(msgs, " ")
+}
+
+func (p providersFailed) Unwrap() []error { return p }
+
+func openMeteoForecast(ctx context.Context, name string, lat, lon float64) (*WeatherResult, error) {
 	raw, err := fetchOpenMeteo(ctx, lat, lon)
 	if err != nil {
 		return nil, err
 	}
-
 	return formatResult(name, lat, lon, raw), nil
 }
 
@@ -111,7 +202,7 @@ func fetchOpenMeteo(ctx context.Context, lat, lon float64) (*OpenMeteoResponse, 
 			"&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,precipitation_probability_max,sunrise,sunset,uv_index_max,wind_speed_10m_max"+
 			"&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=7",
 		openMeteoURL, lat, lon)
-	resp, err := upstream.Get(ctx, "Open-Meteo", u)
+	resp, err := openMeteoUpstream.Get(ctx, "Open-Meteo", u)
 	if err != nil {
 		return nil, err
 	}
@@ -131,16 +222,18 @@ func formatResult(location string, lat, lon float64, data *OpenMeteoResponse) *W
 		Location: location,
 		Lat:      lat,
 		Lon:      lon,
+		Source:   openMeteoSource,
+		TimeZone: data.Timezone,
 		Current: &CurrentWeather{
 			Temperature:   data.Current.Temperature,
-			FeelsLike:     data.Current.ApparentTemp,
+			FeelsLike:     &data.Current.ApparentTemp,
 			Conditions:    weatherDesc(data.Current.WeatherCode),
 			Humidity:      data.Current.Humidity,
 			WindSpeed:     data.Current.WindSpeed,
 			WindDirection: windDir(data.Current.WindDirection),
 			CloudCover:    data.Current.CloudCover,
-			Visibility:    data.Current.Visibility / 1609.34,
-			UVIndex:       data.Current.UVIndex,
+			Visibility:    ptr(data.Current.Visibility / 1609.34),
+			UVIndex:       &data.Current.UVIndex,
 			UVLevel:       uvLevel(data.Current.UVIndex),
 			Precipitation: data.Current.Precipitation / 25.4,
 		},
@@ -160,9 +253,9 @@ func formatResult(location string, lat, lon float64, data *OpenMeteoResponse) *W
 		result.Hourly = append(result.Hourly, HourlyForecast{
 			Time:       ht.Format("3 PM"),
 			Temp:       data.Hourly.Temperature[i],
-			FeelsLike:  data.Hourly.ApparentTemp[i],
+			FeelsLike:  &data.Hourly.ApparentTemp[i],
 			Conditions: weatherDesc(data.Hourly.WeatherCode[i]),
-			PrecipProb: data.Hourly.PrecipProb[i],
+			PrecipProb: &data.Hourly.PrecipProb[i],
 			WindSpeed:  data.Hourly.WindSpeed[i],
 			WindDir:    windDir(data.Hourly.WindDirection[i]),
 		})
@@ -189,9 +282,9 @@ func formatResult(location string, lat, lon float64, data *OpenMeteoResponse) *W
 			Day: day, Date: data.Daily.Time[i],
 			High: data.Daily.TempMax[i], Low: data.Daily.TempMin[i],
 			Conditions: weatherDesc(data.Daily.WeatherCode[i]),
-			PrecipProb: data.Daily.PrecipProbMax[i],
+			PrecipProb: &data.Daily.PrecipProbMax[i],
 			WindMax:    data.Daily.WindSpeedMax[i],
-			UVMax:      data.Daily.UVIndexMax[i],
+			UVMax:      &data.Daily.UVIndexMax[i],
 			Sunrise:    sunrise, Sunset: sunset,
 		})
 	}
@@ -231,6 +324,8 @@ func weatherDesc(code int) string {
 		return "Unknown"
 	}
 }
+
+func ptr[T any](v T) *T { return &v }
 
 func windDir(degrees float64) string {
 	dirs := []string{"N", "NE", "E", "SE", "S", "SW", "W", "NW"}

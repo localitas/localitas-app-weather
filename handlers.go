@@ -3,6 +3,8 @@ package weather
 import (
 	"errors"
 	"net/http"
+	"time"
+	_ "time/tzdata"
 
 	"github.com/localitas/localitas-go/httputil"
 )
@@ -15,7 +17,15 @@ func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusBadRequest, "query parameter 'q' is required (zip code or city name)")
 		return
 	}
-	result, err := LookupWeather(r.Context(), location)
+	loc := time.UTC
+	if tz := r.URL.Query().Get("tz"); tz != "" {
+		var err error
+		if loc, err = time.LoadLocation(tz); err != nil {
+			writeErr(w, r, http.StatusBadRequest, "unknown time zone %q", tz)
+			return
+		}
+	}
+	result, err := LookupWeather(r.Context(), location, loc)
 	var failed *httputil.UpstreamError
 	if errors.As(err, &failed) {
 		writeErr(w, r, http.StatusBadGateway, "%v", err)
