@@ -12,35 +12,61 @@ Full API spec: swagger.json
 ## API Endpoints
 
 Method | Path | Description
-GET | /api/weather?q={location} | Current conditions + forecast
+GET | /api/weather?q={location}&tz={time zone} | Current conditions + forecast
 
 ## Weather Lookup
 
-Provide a zip code, city name, or address to get current conditions and multi-day forecast. The app geocodes the location using Nominatim and fetches weather data from Open-Meteo.
+Provide a zip code, city name, or address to get current conditions, 24 hours and 7 days of forecast. The app finds the place with zippopotam.us (US zip codes) or Nominatim, then asks Open-Meteo for the forecast, and MET Norway when Open-Meteo does not answer.
 
     GET /api/weather?q=San+Francisco
-    GET /api/weather?q=94102
+    GET /api/weather?q=94102&tz=America/Los_Angeles
+
+`tz` is optional: an IANA time zone in which to show MET Norway's times (the web page sends the browser's). Without it they are in UTC. Open-Meteo always gives times in the place's own clock. An unknown `tz` is a 400.
 
 ## Response Data
 
 Each weather response includes:
 - Location name and coordinates
-- Current temperature, humidity, and wind speed
-- Weather condition description
-- Multi-day forecast with daily highs and lows
+- `source`: the provider that forecast it, its licence, and how the app changed its data
+- `time_zone`: the time zone the hours, days, sunrise and sunset are in
+- Current temperature, feels-like, humidity, wind, cloud cover, visibility, UV index and precipitation
+- 24 hourly forecasts and 7 daily forecasts with highs and lows, chance of precipitation, sunrise and sunset
+
+A value the answering provider does not give is `null`, never a guess, and the web page shows it as "—".
 
 ## Data Sources
 
-- **Nominatim (OpenStreetMap)** - Converts location names to geographic coordinates
-- **Open-Meteo** - Provides weather data without requiring an API key
+- **zippopotam.us** and **Nominatim (OpenStreetMap)** - Turn zip codes and place names into coordinates
+- **Open-Meteo** - The forecast, asked first
+- **MET Norway** (api.met.no, Locationforecast 2.0) - The same forecast when Open-Meteo fails or stalls
+
+Both forecast providers are free, need no API key, and license their data CC BY 4.0; the page credits whichever answered under the forecast.
+
+### When Open-Meteo does not answer
+
+Open-Meteo is tried up to 3 times, each try given 5 s. When it has failed, or its first try has not answered within 5 s, MET Norway is asked too (3 tries of 8 s), and the first forecast either gives is the answer. With both stalling the lookup ends after about 30 s; with both failing it is a 502 whose error says how each try of each provider failed.
+
+The app follows MET Norway's terms: its User-Agent names the app and this repository, coordinates are cut to 4 decimals, a forecast is reused until its `Expires` and then revalidated with `If-Modified-Since`, and a 429 (throttled) is not retried.
+
+### What MET Norway's forecast gives
+
+Field | Open-Meteo | MET Norway
+Temperature, humidity, wind, cloud cover, conditions | yes | yes
+Feels like | yes | yes (MET's apparent temperature)
+Precipitation now | yes | MET's forecast for this hour
+Visibility, UV index, daily UV | yes | null
+Chance of precipitation | yes | only where MET forecasts it (around the Nordics), else null
+Daily high and low | yes | from MET's hourly values and 6-hour highs and lows inside the day
+Daily conditions | yes | MET's 12 hours from the step nearest 6 AM
+Sunrise and sunset | yes | computed from the place and date (within a minute or two)
 
 ## Web Interface
 
-The browser UI provides a search box for location lookup. Enter a city or address to see current conditions and a forecast overview rendered server-side.
+The browser UI provides a search box for location lookup. Enter a zip code or city to see current conditions, the next 24 hours and the next 7 days. The provider that answered and the time zone of the times are shown under the forecast.
 
 ## Units
 
-Temperature values are returned in the units configured by Open-Meteo (Celsius by default). Wind speed is reported in km/h.
+Temperatures are in °F, wind in mph, precipitation in inches and visibility in miles, whichever provider answered.
 
 ## Build & Deploy
 
