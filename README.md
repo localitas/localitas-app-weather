@@ -7,9 +7,9 @@ Part of the [Localitas](https://github.com/localitas) platform — a self-hosted
 ## Features
 
 - Current conditions by zip code or city
-- Multi-day forecasts
+- 24-hour and 7-day forecasts
 - UV index, wind, humidity, and feels-like temperature
-- No API key required (uses open weather data)
+- No API key required: forecasts from [Open-Meteo](https://open-meteo.com), and from [MET Norway](https://api.met.no) when Open-Meteo fails or stalls (both CC BY 4.0; the page shows which one answered)
 
 ## Installation
 

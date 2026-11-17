@@ -39,7 +39,7 @@ type APIDoc struct {
 var WeatherAPIDoc = APIDoc{
 	AppName:     "Weather",
 	Version:     "0.1.0",
-	Description: "Weather forecast using Open-Meteo API. Supports US zip codes and worldwide city names. Returns current conditions, 24-hour hourly forecast, and 7-day daily forecast.",
+	Description: "Weather forecast from Open-Meteo, or MET Norway when Open-Meteo fails or stalls. Supports US zip codes and worldwide city names. Returns current conditions, 24-hour hourly forecast, and 7-day daily forecast; values the answering provider does not give are null.",
 	Keywords:    []string{"weather", "forecast", "temperature", "climate", "conditions", "rain", "snow", "wind", "humidity", "UV", "sunrise", "sunset", "hot", "cold", "warm"},
 	Endpoints: []APIEndpoint{
 		{
@@ -48,10 +48,11 @@ var WeatherAPIDoc = APIDoc{
 			Summary: "Get weather forecast for a location",
 			QueryParams: []APIParam{
 				{Name: "q", Type: "string", Required: true, Description: "Location: US zip code (94102) or city name (Tokyo, London, Seoul)"},
+				{Name: "tz", Type: "string", Required: false, Description: "IANA time zone for MET Norway's times (America/Los_Angeles); UTC when absent. Open-Meteo's times are always the place's own"},
 			},
 			Response: &APIBody{
 				ContentType: "application/json",
-				Example:     `{"location":"San Francisco, CA","current":{"temperature":62,"feels_like":58,"conditions":"Partly cloudy","humidity":72,"wind_speed":12,"wind_direction":"W","uv_index":5,"uv_level":"Moderate"},"hourly":[{"time":"2 PM","temperature":63,"conditions":"Clear sky","precip_probability":0}],"daily":[{"day":"Today","high":65,"low":52,"conditions":"Clear sky","sunrise":"6:30 AM","sunset":"7:45 PM"}]}`,
+				Example:     `{"location":"San Francisco, CA","source":{"name":"Open-Meteo","url":"https://open-meteo.com","license":"CC BY 4.0","license_url":"https://creativecommons.org/licenses/by/4.0/"},"time_zone":"America/Los_Angeles","current":{"temperature":62,"feels_like":58,"conditions":"Partly cloudy","humidity":72,"wind_speed":12,"wind_direction":"W","uv_index":5,"uv_level":"Moderate"},"hourly":[{"time":"2 PM","temperature":63,"conditions":"Clear sky","precip_probability":0}],"daily":[{"day":"Today","high":65,"low":52,"conditions":"Clear sky","sunrise":"6:30 AM","sunset":"7:45 PM"}]}`,
 			},
 		},
 	},
