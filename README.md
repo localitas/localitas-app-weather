@@ -30,7 +30,7 @@ cd ~/localitas-app-weather
 
 # Build and run locally
 make build
-./bin/weather-server serve --listen :8000
+./bin/weather-server serve --listen 127.0.0.1:8000
 
 # Or via launchd (macOS)
 make start
